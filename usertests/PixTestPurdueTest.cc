@@ -89,7 +89,7 @@ void PixTestPurdueTest::doTest() {
   vector<string> suite;
   suite.push_back("pretest"); 
   suite.push_back("alive"); 
-  //suite.push_back("trim"); 
+  suite.push_back("trim"); 
   suite.push_back("bb"); 
 
   // suite.push_back("scurves");
