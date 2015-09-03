@@ -90,7 +90,8 @@ void PixTestPurdueTest::doTest() {
   suite.push_back("pretest"); 
   suite.push_back("alive"); 
   suite.push_back("trim"); 
-  suite.push_back("bb"); 
+  suite.push_back("bb3");
+  //suite.push_back("bb") 
 
   // suite.push_back("scurves");
   // suite.push_back("phoptimization"); 
