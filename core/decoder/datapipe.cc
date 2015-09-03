@@ -33,7 +33,8 @@ namespace pxar {
       record.SetStartError();
       Get();
     }
-    record.Add(GetLast());
+    // Store the TBM header word and attach the channel ID in unused header bits:
+    record.Add(GetLast() | ((GetChannel() & 0x7) << 8));
 
     // Else keep reading and adding samples until we find any marker.
     while ((Get() & 0xe000) != 0xc000) {
@@ -126,6 +127,17 @@ namespace pxar {
     roc_Event.Clear();
     rawEvent *sample = Get();
 
+    if((GetFlags() & FLAG_DUMP_FLAWED_EVENTS) != 0) {
+      // Store the current error count for comparison:
+      // Exclude pixel decoding problems, we are looking for more serious things...
+      error_count = decodingStats.errors_event()
+	+ decodingStats.errors_tbm()
+	+ decodingStats.errors_roc();
+
+      std::stringstream thisevent; thisevent << *sample;
+      event_ringbuffer.at(total_event%7) = thisevent.str();
+    }
+
     // Count possibe error states:
     if(sample->IsStartError()) { decodingStats.m_errors_event_start++; }
     if(sample->IsEndError()) { decodingStats.m_errors_event_stop++; }
@@ -141,6 +153,21 @@ namespace pxar {
     else if(GetEnvelopeType() > TBM_EMU) { DecodeDeser400(sample); }
     // Decode DESER160 Data for digital devices without real TBM
     else { DecodeDeser160(sample); }
+
+    if((GetFlags() & FLAG_DUMP_FLAWED_EVENTS) != 0) {
+      if(error_count != (decodingStats.errors_event()
+			 + decodingStats.errors_tbm()
+			 + decodingStats.errors_roc())) { flawed_event = total_event; }
+
+      if(total_event == flawed_event+3) {
+	// Dump the ring buffer:
+	LOG(logERROR) << "Dumping the flawed event +- 3 events:";
+	for(size_t i = total_event; i < total_event+event_ringbuffer.size(); i++) {
+	  LOG(logERROR) << event_ringbuffer.at(i%7);
+	}
+      }
+      total_event++;
+    }
 
     LOG(logDEBUGPIPES) << roc_Event;
     return &roc_Event;
@@ -171,9 +198,6 @@ namespace pxar {
     LOG(logDEBUGPIPES) << "TBM " << static_cast<int>(GetChannel()) << " Header:";
     IFLOG(logDEBUGPIPES) { roc_Event.printHeader(); }
 
-    // Check for correct TBM event ID:
-    CheckEventID();
-
 
     // TBM Trailer:
 
@@ -189,6 +213,9 @@ namespace pxar {
 
     LOG(logDEBUGPIPES) << "TBM " << static_cast<int>(GetChannel()) << " Trailer:";
     IFLOG(logDEBUGPIPES) roc_Event.printTrailer();
+
+    // Check for correct TBM event ID:
+    CheckEventID();
 
     // Remove header and trailer:
     sample->data.erase(sample->data.begin(), sample->data.begin() + 2);
@@ -216,7 +243,7 @@ namespace pxar {
 
 	// Check for DESER400 failure:
 	if(((*word) & 0x0ff0) == 0x0ff0) {
-	  LOG(logCRITICAL) << "TBM " << static_cast<int>(GetChannel())
+	  LOG(logCRITICAL) << "Channel " << static_cast<int>(GetChannel())
 			   << " ROC " << static_cast<int>(roc_n)
 			   << " header reports DESER400 failure!";
 	  decodingStats.m_errors_event_invalid_xor++;
@@ -243,7 +270,7 @@ namespace pxar {
 	try {
 	  // Check if this is just fill bits of the TBM09 data stream 
 	  // accounting for the other channel:
-	  if(GetTokenChainLength() == 4 && (raw&0xffffff) == 0xffffff) {
+	  if(GetEnvelopeType() >= TBM_09 && (raw&0xffffff) == 0xffffff) {
 	    LOG(logDEBUGPIPES) << "Empty hit detected (TBM09 data streams). Skipping.";
 	    continue;
 	  }
@@ -251,7 +278,7 @@ namespace pxar {
 	  // Get the correct ROC id: Channel number x ROC offset (= token chain length)
 	  // TBM08x: channel 0: 0-7, channel 1: 8-15
 	  // TBM09x: channel 0: 0-3, channel 1: 4-7, channel 2: 8-11, channel 3: 12-15
-	  pixel pix(raw,static_cast<uint8_t>(roc_n + ReadPrecedingTokenChainLength()),invertedAddress);
+	  pixel pix(raw,static_cast<uint8_t>(roc_n + GetTokenChainOffset()),invertedAddress);
 	  roc_Event.pixels.push_back(pix);
 	  decodingStats.m_info_pixels_valid++;
 	}
@@ -287,7 +314,6 @@ namespace pxar {
     // Loop over the full data:
     for(std::vector<uint16_t>::iterator word = sample->data.begin(); word != sample->data.end(); word++) {
 
-      std::cout << "Left: " << (sample->data.end() - word) << std::endl;
       // Not enough data for anything, stop here - and assume it was half a pixel hit:
       if((sample->data.end() - word < 2)) { 
 	decodingStats.m_errors_pixel_incomplete++;
@@ -297,7 +323,6 @@ namespace pxar {
       // Check if we have another ROC header (UB and B levels):
       // Here we have to assume the first two words are a ROC header because we rely on
       // its Ultrablack and Black level as initial values for auto-calibration:
-      int16_t levelS = (black - ultrablack)/8;
 
       if(roc_n < 0 || 
 	 // Ultrablack level:
@@ -310,13 +335,14 @@ namespace pxar {
 	evalLastDAC(roc_n, (*(word+2)) & 0x0fff);
 
 	// Iterate to improve ultrablack and black measurement:
-	AverageAnalogLevel(ultrablack, (*word) & 0x0fff);
-	AverageAnalogLevel(black, (*(word+1)) & 0x0fff);
+	AverageAnalogLevel((*word) & 0x0fff, (*(word+1)) & 0x0fff);
 
 	LOG(logDEBUGPIPES) << "ROC Header: "
 			   << expandSign((*word) & 0x0fff) << " (avg. " << ultrablack << ") (UB) "
-			   << expandSign((*(++word)) & 0x0fff) << " (avg. " << black << ") (B) "
-			   << expandSign((*(++word)) & 0x0fff) << " (lastDAC) ";
+			   << expandSign((*(word+1)) & 0x0fff) << " (avg. " << black << ") (B) "
+			   << expandSign((*(word+2)) & 0x0fff) << " (lastDAC) ";
+	// Advance iterator:
+	word +=  2;
       }
       // We have a pixel hit:
       else {
@@ -415,9 +441,16 @@ namespace pxar {
     // After startup, register the first event ID:
     if(eventID == -1) { eventID = roc_Event.triggerCount(); }
 
+    // Check if event contains TBM reset:
+    if(roc_Event.hasResetTBM()) {
+      LOG(logDEBUGPIPES) << "Channel " <<  static_cast<int>(GetChannel())
+			 << " Event ID reset due to ResetTBM";
+      eventID = roc_Event.triggerCount();
+    }
+    
     // Check if TBM event ID matches with expectation:
     if(roc_Event.triggerCount() != (eventID%256)) {
-      LOG(logERROR) << "   Event ID mismatch:  local ID (" << static_cast<int>(eventID) 
+      LOG(logERROR) << "Channel " <<  static_cast<int>(GetChannel()) << " Event ID mismatch:  local ID (" << static_cast<int>(eventID)
 		    << ") !=  TBM ID (" << static_cast<int>(roc_Event.triggerCount()) << ")";
       decodingStats.m_errors_tbm_eventid_mismatch++;
       // To continue readout, set event ID to the currently decoded one:
@@ -431,12 +464,24 @@ namespace pxar {
   void dtbEventDecoder::CheckEventValidity(int16_t roc_n) {
 
     // Check that we found all expected ROC headers:
-    // If the number of ROCs does not correspond to what we expect
-    // clear the event and return:
-    if(roc_n+1 != GetTokenChainLength()) {
-      LOG(logERROR) << "Number of ROCs (" << static_cast<int>(roc_n+1)
+    // In case of a NoTokenPass flag, no ROC headers are expected
+    if(roc_Event.hasNoTokenPass() && (roc_n+1 > 0)) {
+      LOG(logERROR) << "Channel " <<  static_cast<int>(GetChannel())
+		    << " has NoTokenPass but " << static_cast<int>(roc_n+1) 
+		    << " ROCs were found";
+      decodingStats.m_errors_roc_missing++;
+      // This breaks the readback for the missing roc, let's ignore this readback cycle:
+      readback_dirty = true;
+      // Clearing event content:
+      roc_Event.Clear();
+    }
+    // If the number of ROCs does not correspond to what we expect clear the event and return
+    else if(roc_Event.hasTokenPass() && (roc_n+1 != GetTokenChainLength())) {
+      LOG(logERROR) << "Channel " <<  static_cast<int>(GetChannel()) << " Number of ROCs (" << static_cast<int>(roc_n+1)
 		    << ") != Token Chain Length (" << static_cast<int>(GetTokenChainLength()) << ")";
       decodingStats.m_errors_roc_missing++;
+      // This breaks the readback for the missing roc, let's ignore this readback cycle:
+      readback_dirty = true;
       // Clearing event content:
       roc_Event.Clear();
     }
@@ -452,14 +497,28 @@ namespace pxar {
     }
   }
 
-  void dtbEventDecoder::AverageAnalogLevel(int32_t &variable, int16_t dataword) {
-    // Check if this is the initial measurement:
-    if(variable > 0xff) { variable = expandSign(dataword & 0x0fff); }
-    // Average the variable:
-    else { variable = (variable + expandSign(dataword & 0x0fff))/2; }
+  void dtbEventDecoder::AverageAnalogLevel(int16_t word1, int16_t word2) {
+
+    // Take the mean for a window of 1000 samples, initial measurement included
+    if(slidingWindow < 1000) {
+      slidingWindow++;
+      sumUB += expandSign(word1 & 0x0fff);
+      ultrablack = static_cast<float>(sumUB)/slidingWindow;
+      sumB += expandSign(word2 & 0x0fff);
+      black = static_cast<float>(sumB)/slidingWindow;
+    }
+    // Sliding window:
+    else {
+      ultrablack = static_cast<float>(999)/1000*ultrablack + static_cast<float>(1)/1000*expandSign(word1 & 0x0fff);
+      black = static_cast<float>(999)/1000*black + static_cast<float>(1)/1000*expandSign(word2 & 0x0fff);
+    }
+    levelS = (black - ultrablack)/8;
   }
 
   void dtbEventDecoder::evalLastDAC(uint8_t roc, uint16_t val) {
+    // Obey disable flag:
+    if((GetFlags() & FLAG_DISABLE_READBACK_COLLECTION) != 0) { return; }
+
     // Check if we have seen this ROC already:
     if(readback.size() <= roc) readback.resize(roc+1);
     readback.at(roc).push_back(val);
@@ -470,6 +529,9 @@ namespace pxar {
   }
 
   void dtbEventDecoder::evalReadback(uint8_t roc, uint16_t val) {
+    // Obey disable flag:
+    if((GetFlags() & FLAG_DISABLE_READBACK_COLLECTION) != 0) { return; }
+
     // Check if we have seen this ROC already:
     if(shiftReg.size() <= roc) shiftReg.resize(roc+1,0);
     shiftReg.at(roc) <<= 1;
@@ -495,13 +557,14 @@ namespace pxar {
       }
       else {
 	// If this is the first readback cycle of the ROC, ignore the mismatch:
-	if(readback.size() <= roc || readback.at(roc).empty()) {
-	  LOG(logDEBUGAPI) << "ROC " << static_cast<int>(roc)
+	if(readback.size() <= roc || readback.at(roc).empty() || readback_dirty) {
+	  LOG(logDEBUGAPI) << "Channel " <<  static_cast<int>(GetChannel()) << " ROC " << static_cast<int>(roc)
 			   << ": first readback marker after "
 			   << count.at(roc) << " readouts. Ignoring error condition.";
+	  readback_dirty = false;
 	}
 	else {
-	  LOG(logWARNING) << "ROC " << static_cast<int>(roc)
+	  LOG(logWARNING) << "Channel " <<  static_cast<int>(GetChannel()) << " ROC " << static_cast<int>(roc)
 			  << ": Readback start marker after "
 			  << count.at(roc) << " readouts!";
 	  decodingStats.m_errors_roc_readback++;

@@ -152,7 +152,7 @@ namespace pxar {
 
   /** Helper function to recover the ADC sign of analog data words
    */
-  static int16_t expandSign(uint16_t x) { return (x & 0x0800) ? static_cast<int16_t>(x) - 4096 : static_cast<int16_t>(x); }
+  inline int16_t expandSign(uint16_t x) { return (x & 0x0800) ? static_cast<int16_t>(x) - 4096 : static_cast<int16_t>(x); }
 
   /** Helper function to return a printed list of an integer vector, used to shield
    *  debug code from being executed if debug level is not sufficient
@@ -193,6 +193,7 @@ namespace pxar {
     if((flags&FLAG_NOSORT) != 0) { os << "FLAG_NOSORT, "; flags -= FLAG_NOSORT; }
     if((flags&FLAG_CHECK_ORDER) != 0) { os << "FLAG_CHECK_ORDER, "; flags -= FLAG_CHECK_ORDER; }
     if((flags&FLAG_FORCE_UNMASKED) != 0) { os << "FLAG_FORCE_UNMASKED, "; flags -= FLAG_FORCE_UNMASKED; }
+    if((flags&FLAG_DUMP_FLAWED_EVENTS) != 0) { os << "FLAG_DUMP_FLAWED_EVENTS, "; flags -= FLAG_DUMP_FLAWED_EVENTS; }
 
     if(flags != 0) os << "Unknown flag: " << flags;
     return os.str();
