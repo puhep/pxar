@@ -106,12 +106,13 @@ void PixTestPurdueTest::doTest() {
 
     if (!suite[i].compare("trim")) {
       trimvcal = t->getParameter("vcal"); 
-      fPixSetup->getConfigParameters()->setTrimVcalSuffix(trimvcal, true); 
+      fPixSetup->getConfigParameters()->setTrimVcalSuffix(trimvcal, true);
+      t->runCommand("trim"); //bypass the trimbits test 
     }
-
-    //t->fullTest(); 
-    t->doTest(); 
-
+    else {
+      t->doTest(); 
+    }
+    
     delete t; 
   }
 
