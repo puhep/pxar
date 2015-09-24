@@ -127,7 +127,7 @@ namespace pxar {
     roc_Event.Clear();
     rawEvent *sample = Get();
 
-    if((GetFlags() & FLAG_DUMP_FLAWED_EVENTS) != 0) {
+    if(dump_count < 100 && (GetFlags() & FLAG_DUMP_FLAWED_EVENTS) != 0) {
       // Store the current error count for comparison:
       // Exclude pixel decoding problems, we are looking for more serious things...
       error_count = decodingStats.errors_event()
@@ -154,7 +154,7 @@ namespace pxar {
     // Decode DESER160 Data for digital devices without real TBM
     else { DecodeDeser160(sample); }
 
-    if((GetFlags() & FLAG_DUMP_FLAWED_EVENTS) != 0) {
+    if(dump_count < 100 && (GetFlags() & FLAG_DUMP_FLAWED_EVENTS) != 0) {
       if(error_count != (decodingStats.errors_event()
 			 + decodingStats.errors_tbm()
 			 + decodingStats.errors_roc())) { flawed_event = total_event; }
@@ -164,6 +164,10 @@ namespace pxar {
 	LOG(logERROR) << "Dumping the flawed event +- 3 events:";
 	for(size_t i = total_event; i < total_event+event_ringbuffer.size(); i++) {
 	  LOG(logERROR) << event_ringbuffer.at(i%7);
+	}
+	dump_count++;
+	if(dump_count == 100) {
+	  LOG(logERROR) << "Channel " << static_cast<int>(GetChannel()) << ": Reached 100 dumped events, stopping now...";
 	}
       }
       total_event++;
@@ -470,8 +474,8 @@ namespace pxar {
 		    << " has NoTokenPass but " << static_cast<int>(roc_n+1) 
 		    << " ROCs were found";
       decodingStats.m_errors_roc_missing++;
-      // This breaks the readback for the missing roc, let's ignore this readback cycle:
-      readback_dirty = true;
+      // This breaks the readback for the missing roc, let's ignore this readback cycle for all ROCs:
+      std::fill(readback_dirty.begin(), readback_dirty.end(), true);
       // Clearing event content:
       roc_Event.Clear();
     }
@@ -480,8 +484,8 @@ namespace pxar {
       LOG(logERROR) << "Channel " <<  static_cast<int>(GetChannel()) << " Number of ROCs (" << static_cast<int>(roc_n+1)
 		    << ") != Token Chain Length (" << static_cast<int>(GetTokenChainLength()) << ")";
       decodingStats.m_errors_roc_missing++;
-      // This breaks the readback for the missing roc, let's ignore this readback cycle:
-      readback_dirty = true;
+      // This breaks the readback for the missing roc, let's ignore this readback cycle for all ROCs:
+      std::fill(readback_dirty.begin(), readback_dirty.end(), true);
       // Clearing event content:
       roc_Event.Clear();
     }
@@ -534,6 +538,7 @@ namespace pxar {
 
     // Check if we have seen this ROC already:
     if(shiftReg.size() <= roc) shiftReg.resize(roc+1,0);
+    if(readback_dirty.size() <= roc) readback_dirty.resize(roc+1,false);
     shiftReg.at(roc) <<= 1;
     if(val&1) shiftReg.at(roc)++;
 
@@ -557,11 +562,11 @@ namespace pxar {
       }
       else {
 	// If this is the first readback cycle of the ROC, ignore the mismatch:
-	if(readback.size() <= roc || readback.at(roc).empty() || readback_dirty) {
+	if(readback.size() <= roc || readback.at(roc).empty() || readback_dirty.at(roc)) {
 	  LOG(logDEBUGAPI) << "Channel " <<  static_cast<int>(GetChannel()) << " ROC " << static_cast<int>(roc)
 			   << ": first readback marker after "
 			   << count.at(roc) << " readouts. Ignoring error condition.";
-	  readback_dirty = false;
+	  readback_dirty.at(roc) = false;
 	}
 	else {
 	  LOG(logWARNING) << "Channel " <<  static_cast<int>(GetChannel()) << " ROC " << static_cast<int>(roc)
