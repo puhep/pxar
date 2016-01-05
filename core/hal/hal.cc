@@ -171,6 +171,10 @@ void hal::setTestboardDelays(std::map<uint8_t,uint8_t> sig_delays) {
       LOG(logDEBUGHAL) << "Set DTB loop delay between triggers to " << static_cast<int>(sigIt->second)*10 <<" clk";
       _testboard->SetLoopTriggerDelay(sigIt->second*10);
     }
+    else if(sigIt->first == SIG_LOOP_TRIM_DELAY) {
+      LOG(logDEBUGHAL) << "Set DTB loop delay after trimming to " << static_cast<int>(sigIt->second)*10 <<" clk";
+      _testboard->SetLoopTrimDelay(sigIt->second*10);
+    }
     else if(sigIt->first == SIG_TRIGGER_LATENCY) {
       LOG(logDEBUGHAL) << "Set latency for external triggers to " << static_cast<int>(sigIt->second) <<" clk";
       _testboard->Trigger_Delay(sigIt->second);
@@ -1521,7 +1525,7 @@ void hal::daqStart(uint16_t flags, uint8_t deser160phase, uint32_t buffersize) {
 
     // If we have an old TBM version set up the DESER400 to read old data format:
     // "old" is everything before TBM08B (so: TBM08, TBM08A)
-    if(m_tbmtype < TBM_08B) { 
+    if(m_tbmtype < TBM_08A) { 
       LOG(logDEBUGHAL) << "Pre-series TBM with outdated trailer format. Configuring DESER400 accordingly.";
       _testboard->Daq_Deser400_OldFormat(true);
     }

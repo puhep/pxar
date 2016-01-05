@@ -1,5 +1,5 @@
-#include <stdlib.h>     /* atof, atoi */
-#include <algorithm>    // std::find
+#include <stdlib.h>     
+#include <algorithm>    
 #include <iostream>
 #include <fstream>
 
@@ -209,7 +209,7 @@ void PixTestTrim::trimTest() {
     vcalMin = d1->GetMean() - NSIGMA*d1->GetRMS();
     if (vcalMin < 0) vcalMin = 0; 
     vcalMax = d1->GetMean() + NSIGMA*d1->GetRMS();
-    if (vcalMax > 255) vcalMin = 255; 
+    if (vcalMax > 255) vcalMax = 255; 
     delete d1; 
 
     s1 = hname.rfind("_C");
